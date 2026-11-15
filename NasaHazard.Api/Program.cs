@@ -9,6 +9,8 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 
 builder.Services.AddScoped<ISatelliteDataService, RealSatelliteDataService>();
+builder.Services.AddHttpClient<INasaEonetService, NasaEonetService>();
+builder.Services.AddHttpClient<IEmergencyInfrastructureService, OverpassEmergencyInfrastructureService>();
 builder.Services.AddScoped<HuaicoRiskEngine>();
 
 builder.Services.AddCors(options =>
