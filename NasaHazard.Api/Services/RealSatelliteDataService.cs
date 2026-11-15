@@ -56,7 +56,7 @@ public class RealSatelliteDataService : ISatelliteDataService
             TerrainGrid5Km: terrainResult
         );
 
-        _cache.Set(cacheKey, finalDto, TimeSpan.FromMinutes(30));
+        _cache.Set(cacheKey, finalDto, TimeSpan.FromHours(12));
         return finalDto;
     }
 

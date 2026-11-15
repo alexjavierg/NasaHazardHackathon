@@ -21,6 +21,15 @@ public class HazardAnalysisController : ControllerBase
         _riskEngine = riskEngine;
     }
 
+
+
+    [HttpGet("/health")]
+    public IActionResult HealthCheck()
+    {
+        return Ok(new { status = "ok" });
+    }
+
+
     [HttpGet("analyze")]
     public async Task<ActionResult<HazardSimulationResponse>> AnalyzeLocationGet(
         [FromQuery] double latitude = -11.9365,
