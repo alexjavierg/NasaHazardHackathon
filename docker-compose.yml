@@ -1,0 +1,7 @@
+﻿services:
+  nasa-api:
+    build: .
+    container_name: nasa_hazard_api
+    restart: always
+    ports:
+      - "80:8080"
