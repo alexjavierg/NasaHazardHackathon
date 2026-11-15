@@ -1,0 +1,212 @@
+'''📡 DOCUMENTACIÓN TÉCNICA DE LA API — NASA HAZARD & 3D SIMULATION'''
+
+Equipo, la API ya está desplegada en producción en nuestro servidor con '''CORS totalmente habilitado''' y conectada en tiempo real a '''NASA POWER (GPM/MERRA-2)''' y al modelo digital de elevación '''DEM 3D'''.* '''URL de Swagger UI (Para probar en el navegador):''' [http://13.78.132.29/index.html](http://13.78.132.29/index.html) 
+* '''Endpoint Principal:''' POST [http://13.78.132.29/api/v1/hazard/analyze](http://13.78.132.29/api/v1/hazard/analyze) 
+* '''Headers requeridos:''' Content-Type: application/json
+
+
+
+=== 1. Estructura del Payload de Entrada (AnalyzeLocationRequest ===
+
+)
+
+Cuando el usuario seleccione un punto en el mapa (o mueva el slider de simulación de tormenta), envíen este JSON por POST:
+
+JSON
+
+{
+
+"latitude": -11.9365,
+
+"longitude": -76.6912,
+
+"radiusKm": 5.0,
+
+"simulatedRainMm": null
+
+}* '''latitude / longitude''' ''(double)'': Coordenada seleccionada por el usuario en cualquier parte del mundo.
+* '''radiusKm''' ''(double)'': Radio de análisis topográfico en kilómetros (por defecto 5.0).
+* '''simulatedRainMm''' ''(double | null)'':
+** Si envían null, el servidor usa la '''precipitación satelital real de hoy''' de la NASA.
+** Si envían un número (ej. 35.0 o 60.0 desde un '''Slider de Simulación de Tormenta''' en el Frontend), el servidor recalcula en tiempo real cómo reaccionaría esa quebrada ante esa cantidad de lluvia. '''¡Fundamental poner este Slider en la UI para la demo en vivo frente al jurado!'''
+
+
+
+=== 2. Estructura de la Respuesta JSON y Qué Debe Hacer el Frontend / Motor 3D con Cada Bloque ===
+
+La API responde con código 200 OK y un objeto JSON dividido en '''6 bloques técnicos''':
+
+==== Bloque A: location (LocationMetadataDto) ====
+
+JSON
+
+"location": {
+
+"latitude": -11.9365,
+
+"longitude": -76.6912,
+
+"radiusKm": 5,
+
+"centerElevationMeters": 854,
+
+"maxSlopeDegrees": 22.2
+
+}* '''Qué hacer en UI:''' Mostrar la altitud exacta del punto (854 msnm) y la inclinación máxima de la quebrada (22.2°). Si supera los 20°, destacar en rojo que es topografía de alta pendiente propensa a flujo de detritos (huaico).
+
+
+
+==== Bloque B: currentSatelliteMetrics (CurrentConditionsDto ====
+
+)
+
+JSON
+
+"currentSatelliteMetrics": {
+
+"precipitationLast24hMm": 35,
+
+"surfaceSoilMoistureIndex": 0.23,
+
+"deepSoilMoistureIndex": 0.25,
+
+"maxTemperatureCelsius": 24.7,
+
+"dataSource": "NASA POWER (10Y Baseline) + Open-Meteo DEM + Rain Override"
+
+}* '''Qué hacer en UI:'''
+** surfaceSoilMoistureIndex y deepSoilMoistureIndex vienen de 0.0 a 1.0 (multiplicar por 100 para mostrar en barra de porcentaje: 23% y 25%). Representan la '''memoria hidrológica del suelo''' medida por la misión GPM/MERRA-2 de la NASA.
+
+
+
+==== Bloque C: historical10YearBaseline (HistoricalBaselineDto) ====
+
+JSON
+
+"historical10YearBaseline": {
+
+"yearsAnalyzed": 10,
+
+"p95ExtremeRainThresholdMm": 6,
+
+"maxHistoricalRainDayMm": 17,
+
+"maxHistoricalEventDate": "2026-01-09",
+
+"averageSoilMoistureForMonth": 0.15
+
+}* '''Qué hacer en UI:''' El servidor descarga y procesa '''10 años de historia (3,650 días)''' al instante. Usen p95ExtremeRainThresholdMm para dibujar una línea punteada roja ("Umbral Crítico de Desastre de esta zona") y compárenla contra precipitationLast24hMm.
+
+
+
+==== Bloque D: riskAssessment (RiskAssessmentDto) ====
+
+JSON
+
+"riskAssessment": {
+
+"overallRiskScore": 68,
+
+"alertLevel": "HIGH",
+
+"huaicoProbabilityPercent": 56.6,
+
+"floodProbabilityPercent": 53.9,
+
+"triggerReason": "[MODO SIMULACIÓN] Lluvia analizada (35.0 mm vs umbral P95 de 6.0 mm)..."
+
+}* '''Qué hacer en UI:'''
+** overallRiskScore (0 a 100): Para el velocímetro/gauge principal de riesgo.
+** alertLevel: Viene como "LOW" (Verde), "MODERATE" (Amarillo), "HIGH" (Naranja) o "CRITICAL" (Rojo parpadeante).
+** triggerReason: Texto explicativo generado automáticamente listo para mostrar en el banner de alerta.
+
+
+
+==== Bloque E: forecastNext7Days (DailyForecastRiskDto[] ====
+
+)* Array de 7 objetos con date, predictedRainMm, projectedSoilSaturation, dayRiskScore y alertLevel.
+* '''Qué hacer en UI:''' Dibujar una gráfica de línea/barras de los próximos 7 días mostrando cómo se va saturando el suelo día a día y qué día exacto de la próxima semana se activará la quebrada.
+
+
+
+==== Bloque F: simulation3D (Terrain3DSimulationDto — PARA EL ENCARGADO DEL MAPA 3D) ====
+
+JSON
+
+"simulation3D": {
+
+"boundingBox5Km": {
+
+"north": -11.89158,
+
+"south": -11.98142,
+
+"east": -76.64628,
+
+"west": -76.73612
+
+},
+
+"debrisFlowPaths": [
+
+{
+
+"pathId": "quebrada-principal-01",
+
+"severity": "HIGH",
+
+"estimatedVelocityMetersPerSec": 7.1,
+
+"coordinates": [
+
+{ "lat": -11.95896, "lon": -76.64628, "elevationMeters": 2165 },
+
+{ "lat": -11.91404, "lon": -76.6912, "elevationMeters": 1687 },
+
+{ "lat": -11.9365, "lon": -76.6912, "elevationMeters": 854 },
+
+{ "lat": -11.9365, "lon": -76.73612, "elevationMeters": 1118 },
+
+{ "lat": -11.95896, "lon": -76.73612, "elevationMeters": 744 }
+
+]
+
+}
+
+],
+
+"inundationPolygon": [
+
+{ "lat": -11.95896, "lon": -76.73612, "elevationMeters": 744 },
+
+{ "lat": -11.9365, "lon": -76.6912, "elevationMeters": 854 },
+
+{ "lat": -11.9365, "lon": -76.71366, "elevationMeters": 946 },
+
+{ "lat": -11.98142, "lon": -76.73612, "elevationMeters": 974 }
+
+],
+
+"recommendedEvacuationZone": {
+
+"name": "Ladera Elevada Segura (Fuera de Cauce)",
+
+"lat": -11.9365,
+
+"lon": -76.66874,
+
+"elevationMeters": 1186,
+
+"distanceFromCenterMeters": 2443
+
+}
+
+}* '''Qué debe hacer el Motor 3D (Mapbox GL / MapLibre / Three.js / Cesium):'''
+*# '''boundingBox5Km''' (BoundingBoxDto): Encuadrar la cámara 3D dentro de esos límites Norte/Sur/Este/Oeste. 
+*# '''debrisFlowPaths[0].coordinates''': Contiene los puntos 3D reales (lat, lon, elevationMeters) ordenados desde la cumbre donde nace el huaico (2165 m) pasando por el centro (854 m) hasta el fondo de la cuenca (744 m). Trazar una línea/partículas animadas de flujo bajando a la velocidad estimatedVelocityMetersPerSec (7.1 m/s).
+*# '''inundationPolygon''': Los 4 puntos de menor cota donde se empoza el agua/lodo. Dibujar un polígono semitransparente rojo/azul sobre el terreno.
+*# '''recommendedEvacuationZone''': Dibujar un marcador verde elevado ("ZONA SEGURA DE EVACUACIÓN") en esa coordenada (1186 msnm) y trazar una línea punteada verde desde el punto central (location.latitude, location.longitude) hasta esa zona segura.
+
+
+
+
