@@ -5,6 +5,7 @@ public record HazardSimulationResponse(
     CurrentConditionsDto CurrentSatelliteMetrics,
     HistoricalBaselineDto Historical10YearBaseline,
     RiskAssessmentDto RiskAssessment,
+    HumanLifeSavingPlanDto HumanLifeSavingPlan,
     List<DailyForecastRiskDto> ForecastNext7Days,
     Terrain3DSimulationDto Simulation3D
 );
@@ -19,10 +20,10 @@ public record LocationMetadataDto(
 
 public record CurrentConditionsDto(
     double PrecipitationLast24hMm,
-    double SurfaceSoilMoistureIndex, // GWETTOP (0.0 a 1.0)
-    double DeepSoilMoistureIndex,    // GWETPROF (0.0 a 1.0)
+    double SurfaceSoilMoistureIndex,
+    double DeepSoilMoistureIndex,
     double MaxTemperatureCelsius,
-    string DataSource                // "NASA POWER (GPM/MERRA-2) + DEM"
+    string DataSource
 );
 
 public record HistoricalBaselineDto(
@@ -34,11 +35,21 @@ public record HistoricalBaselineDto(
 );
 
 public record RiskAssessmentDto(
-    int OverallRiskScore,            // 0 a 100
-    string AlertLevel,               // "LOW", "MODERATE", "HIGH", "CRITICAL"
+    int OverallRiskScore,
+    string AlertLevel,
     double HuaicoProbabilityPercent,
     double FloodProbabilityPercent,
+    double EstimatedMudflowVolumeM3PerSec,
     string TriggerReason
+);
+
+public record HumanLifeSavingPlanDto(
+    int EstimatedImpactLeadTimeMinutes,
+    string EvacuationCompassDirection,
+    int WalkingTimeAdultMinutes,
+    int WalkingTimeVulnerableMinutes,
+    string SmsCommunityAlertText,
+    List<string> ImmediateActionChecklist
 );
 
 public record DailyForecastRiskDto(

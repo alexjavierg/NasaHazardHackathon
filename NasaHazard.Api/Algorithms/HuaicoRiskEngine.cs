@@ -13,11 +13,10 @@ public class HuaicoRiskEngine
         double lon = raw.Longitude;
         double offsetDeg = raw.RadiusKm / 111.32;
 
-        // 1. ESTADÍSTICA REAL DE LOS 10 AÑOS (NASA POWER)
         var validHistory = raw.Historical10YearsDaily ?? new List<HistoricalDayRecordDto>();
         var wetDays = validHistory.Where(d => d.RainMm >= 1.0).OrderBy(d => d.RainMm).ToList();
 
-        double p95Threshold = 12.0; // Umbral base para zonas áridas/quebradas secas
+        double p95Threshold = 12.0;
         if (wetDays.Count >= 5)
         {
             int p95Index = (int)Math.Floor(wetDays.Count * 0.95);
@@ -33,7 +32,6 @@ public class HuaicoRiskEngine
             ? Math.Round(monthRecords.Average(d => d.SoilMoisture), 2)
             : 0.35;
 
-        // 2. TOPOGRAFÍA 3D REAL Y PENDIENTE (GRILLA 5 KM)
         var grid = raw.TerrainGrid5Km.Count > 0
             ? raw.TerrainGrid5Km
             : new List<GeoPoint3DDto> { new(lat, lon, 500) };
@@ -49,11 +47,9 @@ public class HuaicoRiskEngine
             highestPoint.Lat, highestPoint.Lon, lowestPoint.Lat, lowestPoint.Lon));
         double elevationDropMeters = Math.Max(1.0, highestPoint.ElevationMeters - lowestPoint.ElevationMeters);
 
-        // Factor de amplificación de micro-quebrada (grilla 5km suaviza laderas locales)
         double rawSlopeRad = Math.Atan((elevationDropMeters * 2.8) / distHighToLowMeters);
         double maxSlopeDegrees = Math.Round(Math.Clamp(rawSlopeRad * (180.0 / Math.PI), 1.5, 52.0), 1);
 
-        // 3. ALGORITMO DE RIESGO (LLUVIA + MEMORIA DEL SUELO + PENDIENTE)
         double effectiveRain = simulatedRainMm ?? raw.CurrentRainMm;
         double rainRatio = effectiveRain / Math.Max(1.0, p95Threshold);
 
@@ -64,17 +60,19 @@ public class HuaicoRiskEngine
         int overallRiskScore = (int)Math.Round(Math.Clamp(rainScore + moistureScore + slopeScore, 5, 100));
         string alertLevel = GetAlertLevel(overallRiskScore);
 
-        // Si hay pendiente fuerte (>12°), el riesgo se transforma en Huaico; si es plano, en Inundación
         double slopeFactor = Math.Clamp(maxSlopeDegrees / 28.0, 0.15, 1.0);
         double huaicoProb = Math.Round(Math.Clamp(overallRiskScore * slopeFactor * 1.05, 2.0, 99.0), 1);
         double floodProb = Math.Round(Math.Clamp(overallRiskScore * (1.15 - (slopeFactor * 0.45)), 5.0, 99.0), 1);
+
+        // Caudal estimado de lodo y escorrentía en m3/s
+        double runoffCoeff = Math.Clamp(0.25 + (raw.SurfaceSoilMoisture * 0.65), 0.25, 0.95);
+        double mudflowVolumeM3s = Math.Round((effectiveRain * runoffCoeff * raw.RadiusKm * 1.8), 1);
 
         string modeTag = simulatedRainMm.HasValue ? "[MODO SIMULACIÓN] " : "";
         string triggerReason = $"{modeTag}Lluvia analizada ({effectiveRain:F1} mm vs umbral P95 de {p95Threshold:F1} mm), " +
                                $"saturación superficial del suelo al {(raw.SurfaceSoilMoisture * 100):F0}% y " +
                                $"desnivel topográfico de {elevationDropMeters:F0} m ({maxSlopeDegrees:F1}°).";
 
-        // 4. PROYECCIÓN A 7 DÍAS CON MEMORIA DE HUMEDAD DE SUELO
         var forecastList = new List<DailyForecastRiskDto>();
         double rollingMoisture = raw.SurfaceSoilMoisture;
 
@@ -95,7 +93,6 @@ public class HuaicoRiskEngine
             ));
         }
 
-        // 5. VECTORES 3D DE CAUCE Y ZONA DE EVACUACIÓN
         var sortedByElevation = grid.OrderByDescending(p => p.ElevationMeters).ToList();
         var flowCoordinates = new List<GeoPoint3DDto>
         {
@@ -111,14 +108,37 @@ public class HuaicoRiskEngine
 
         var lowestBasinPoints = grid.OrderBy(p => p.ElevationMeters).Take(4).ToList();
 
-        // Buscar loma segura: más alta que el centro, pero sin irse hasta la cumbre extrema
         var safeCandidate = grid
-            .Where(p => p.ElevationMeters > centerPoint.ElevationMeters + 10)
+            .Where(p => p.ElevationMeters > centerPoint.ElevationMeters + 12)
             .OrderBy(p => CalculateDistanceMeters(lat, lon, p.Lat, p.Lon))
             .FirstOrDefault() ?? highestPoint;
 
-        int safeDistMeters = (int)Math.Round(
-            CalculateDistanceMeters(lat, lon, safeCandidate.Lat, safeCandidate.Lon));
+        int safeDistMeters = Math.Max(150, (int)Math.Round(
+            CalculateDistanceMeters(lat, lon, safeCandidate.Lat, safeCandidate.Lon)));
+
+        // CÁLCULO HUMANO SALVA-VIDAS (Lead Time + Tiempo de Escape + Brújula)
+        double distPeakToCenterMeters = Math.Max(800.0, CalculateDistanceMeters(
+            highestPoint.Lat, highestPoint.Lon, centerPoint.Lat, centerPoint.Lon));
+        int impactLeadTimeMinutes = Math.Max(3, (int)Math.Round((distPeakToCenterMeters / velocityMs) / 60.0));
+
+        double climbMeters = Math.Max(5.0, safeCandidate.ElevationMeters - centerPoint.ElevationMeters);
+        // Regla de Naismith para evacuación en subida (1.1 m/s horizontal + penalidad por escalada)
+        int adultWalkMin = Math.Max(2, (int)Math.Ceiling(((safeDistMeters / 65.0) + (climbMeters / 10.0))));
+        int vulnerableWalkMin = (int)Math.Ceiling(adultWalkMin * 1.75); // Adultos mayores, niños, gestantes
+
+        string compassDir = GetCompassDirection(lat, lon, safeCandidate.Lat, safeCandidate.Lon);
+
+        string smsText = $"[ALERTA {alertLevel}] Riesgo de Huaico ({huaicoProb}%). " +
+                         $"Evacue hacia el {compassDir} ({safeDistMeters}m, cota {safeCandidate.ElevationMeters:F0}m). " +
+                         $"Tiempo estimado de impacto: {impactLeadTimeMinutes} min. No cruce la quebrada.";
+
+        var checklist = new List<string>
+        {
+            $"Evacuar inmediatamente en dirección {compassDir} hacia la ladera alta ({safeCandidate.ElevationMeters:F0} msnm).",
+            $"Priorizar la salida de adultos mayores y niños (requieren ~{vulnerableWalkMin} min frente a {impactLeadTimeMinutes} min de margen).",
+            "Cortar el suministro eléctrico y de gas antes de abandonar la vivienda si el margen supera los 10 minutos.",
+            "Alejarse al menos 150 metros del eje central del cauce y no intentar cruzar puentes ni badenes."
+        };
 
         return new HazardSimulationResponse(
             Location: new LocationMetadataDto(
@@ -149,7 +169,16 @@ public class HuaicoRiskEngine
                 AlertLevel: alertLevel,
                 HuaicoProbabilityPercent: huaicoProb,
                 FloodProbabilityPercent: floodProb,
+                EstimatedMudflowVolumeM3PerSec: mudflowVolumeM3s,
                 TriggerReason: triggerReason
+            ),
+            HumanLifeSavingPlan: new HumanLifeSavingPlanDto(
+                EstimatedImpactLeadTimeMinutes: impactLeadTimeMinutes,
+                EvacuationCompassDirection: compassDir,
+                WalkingTimeAdultMinutes: adultWalkMin,
+                WalkingTimeVulnerableMinutes: vulnerableWalkMin,
+                SmsCommunityAlertText: smsText,
+                ImmediateActionChecklist: checklist
             ),
             ForecastNext7Days: forecastList,
             Simulation3D: new Terrain3DSimulationDto(
@@ -170,11 +199,11 @@ public class HuaicoRiskEngine
                 },
                 InundationPolygon: lowestBasinPoints,
                 RecommendedEvacuationZone: new SafeZoneDto(
-                    Name: "Ladera Elevada Segura (Fuera de Cauce)",
+                    Name: $"Ladera Segura {compassDir} (Fuera de Cauce)",
                     Lat: safeCandidate.Lat,
                     Lon: safeCandidate.Lon,
                     ElevationMeters: safeCandidate.ElevationMeters,
-                    DistanceFromCenterMeters: Math.Max(120, safeDistMeters)
+                    DistanceFromCenterMeters: safeDistMeters
                 )
             )
         );
@@ -188,9 +217,21 @@ public class HuaicoRiskEngine
         _ => "LOW"
     };
 
+    private static string GetCompassDirection(double lat1, double lon1, double lat2, double lon2)
+    {
+        double dLon = (lon2 - lon1) * (Math.PI / 180.0);
+        double y = Math.Sin(dLon) * Math.Cos(lat2 * (Math.PI / 180.0));
+        double x = Math.Cos(lat1 * (Math.PI / 180.0)) * Math.Sin(lat2 * (Math.PI / 180.0)) -
+                   Math.Sin(lat1 * (Math.PI / 180.0)) * Math.Cos(lat2 * (Math.PI / 180.0)) * Math.Cos(dLon);
+        double brng = (Math.Atan2(y, x) * (180.0 / Math.PI) + 360.0) % 360.0;
+
+        string[] dirs = ["NORTE (N)", "NORESTE (NE)", "ESTE (E)", "SURESTE (SE)", "SUR (S)", "SUROESTE (SO)", "OESTE (O)", "NOROESTE (NO)"];
+        return dirs[(int)Math.Round(brng / 45.0) % 8];
+    }
+
     private static double CalculateDistanceMeters(double lat1, double lon1, double lat2, double lon2)
     {
-        const double R = 6371000; // Radio terrestre en metros
+        const double R = 6371000;
         double dLat = (lat2 - lat1) * (Math.PI / 180.0);
         double dLon = (lon2 - lon1) * (Math.PI / 180.0);
         double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
