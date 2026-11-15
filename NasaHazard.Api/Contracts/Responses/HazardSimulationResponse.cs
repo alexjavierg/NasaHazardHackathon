@@ -4,6 +4,7 @@ public record HazardSimulationResponse(
     LocationMetadataDto Location,
     CurrentConditionsDto CurrentSatelliteMetrics,
     HistoricalBaselineDto Historical10YearBaseline,
+    TrendAnalysisDto TrendAnalysis,
     RiskAssessmentDto RiskAssessment,
     HumanLifeSavingPlanDto HumanLifeSavingPlan,
     List<DailyForecastRiskDto> ForecastNext7Days,
@@ -31,7 +32,21 @@ public record HistoricalBaselineDto(
     double P95ExtremeRainThresholdMm,
     double MaxHistoricalRainDayMm,
     string MaxHistoricalEventDate,
-    double AverageSoilMoistureForMonth
+    double AverageSoilMoistureForMonth,
+    bool TrendTestPerformed,
+    double MannKendallZ,
+    double PValue,
+    bool IsSignificant,
+    string TrendDirection,
+    TrendAnalysisDto TrendAnalysis
+);
+
+public record TrendAnalysisDto(
+    bool TrendTestPerformed,
+    double MannKendallZ,
+    double PValue,
+    bool IsSignificant,
+    string TrendDirection
 );
 
 public record RiskAssessmentDto(
